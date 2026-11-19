@@ -3,6 +3,7 @@
 #define _LINUX_SCHED_CPUFREQ_H
 
 #include <linux/types.h>
+#include <linux/compiler.h>
 
 /*
  * Interface between cpufreq drivers and the scheduler:
@@ -29,9 +30,16 @@ static inline unsigned long map_util_freq(unsigned long util,
 	return freq * util / cap;
 }
 
+/*
+ * DVFS headroom added to utilization before it is mapped to a frequency,
+ * in percent (125 == upstream's util + util/4, 100 == no headroom).
+ * Runtime tunable: /proc/sys/kernel/sched_util_headroom_pct
+ */
+extern unsigned int sysctl_sched_util_headroom_pct;
+
 static inline unsigned long map_util_perf(unsigned long util)
 {
-	return util + (util >> 2);
+	return util * READ_ONCE(sysctl_sched_util_headroom_pct) / 100;
 }
 #endif /* CONFIG_CPU_FREQ */
 

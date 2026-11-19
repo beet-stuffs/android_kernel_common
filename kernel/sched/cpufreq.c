@@ -9,6 +9,33 @@
 DEFINE_PER_CPU(struct update_util_data __rcu *, cpufreq_update_util_data);
 EXPORT_PER_CPU_SYMBOL_GPL(cpufreq_update_util_data);
 
+/* DVFS headroom in percent applied by map_util_perf(); upstream is 125 (+25%). */
+unsigned int sysctl_sched_util_headroom_pct = 100;
+
+#ifdef CONFIG_SYSCTL
+static unsigned int sched_util_headroom_min = 100;
+static unsigned int sched_util_headroom_max = 200;
+
+static struct ctl_table sched_util_headroom_sysctls[] = {
+	{
+		.procname	= "sched_util_headroom_pct",
+		.data		= &sysctl_sched_util_headroom_pct,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= proc_douintvec_minmax,
+		.extra1		= &sched_util_headroom_min,
+		.extra2		= &sched_util_headroom_max,
+	},
+};
+
+static int __init sched_util_headroom_sysctl_init(void)
+{
+	register_sysctl_init("kernel", sched_util_headroom_sysctls);
+	return 0;
+}
+late_initcall(sched_util_headroom_sysctl_init);
+#endif
+
 /**
  * cpufreq_add_update_util_hook - Populate the CPU's update_util_data pointer.
  * @cpu: The CPU to set the pointer for.
