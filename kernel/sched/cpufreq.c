@@ -13,7 +13,7 @@ EXPORT_PER_CPU_SYMBOL_GPL(cpufreq_update_util_data);
 unsigned int sysctl_sched_util_headroom_pct = 100;
 
 #ifdef CONFIG_SYSCTL
-static unsigned int sched_util_headroom_min = 100;
+static unsigned int sched_util_headroom_min = 50;
 static unsigned int sched_util_headroom_max = 200;
 
 static struct ctl_table sched_util_headroom_sysctls[] = {

@@ -32,7 +32,7 @@ static inline unsigned long map_util_freq(unsigned long util,
 
 /*
  * DVFS headroom added to utilization before it is mapped to a frequency,
- * in percent (125 == upstream's util + util/4, 100 == no headroom).
+ * in percent (125 == upstream's util + util/4, 100 == no headroom, 50..200 allowed).
  * Runtime tunable: /proc/sys/kernel/sched_util_headroom_pct
  */
 extern unsigned int sysctl_sched_util_headroom_pct;

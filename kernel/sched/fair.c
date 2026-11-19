@@ -8631,6 +8631,49 @@ compute_energy(struct energy_env *eenv, struct perf_domain *pd,
  * other use-cases too. So, until someone finds a better way to solve this,
  * let's keep things simple by re-using the existing slow path.
  */
+/*
+ * Tasks in a cgroup that has cpu.uclamp.latency_sensitive set (e.g. top-app
+ * while the power HAL signals user interaction) are only placed on idle CPUs by
+ * the energy-aware wakeup path, as long as one fits. Energy is still the
+ * tie-breaker between the idle candidates. 0 disables this at runtime:
+ * /proc/sys/kernel/sched_ls_prefer_idle
+ */
+unsigned int sysctl_sched_ls_prefer_idle __read_mostly = 1;
+
+#ifdef CONFIG_SYSCTL
+static unsigned int sched_ls_prefer_idle_max = 1;
+
+static struct ctl_table sched_ls_prefer_idle_sysctls[] = {
+	{
+		.procname	= "sched_ls_prefer_idle",
+		.data		= &sysctl_sched_ls_prefer_idle,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= proc_douintvec_minmax,
+		.extra1		= SYSCTL_ZERO,
+		.extra2		= &sched_ls_prefer_idle_max,
+	},
+};
+
+static int __init sched_ls_prefer_idle_sysctl_init(void)
+{
+	register_sysctl_init("kernel", sched_ls_prefer_idle_sysctls);
+	return 0;
+}
+late_initcall(sched_ls_prefer_idle_sysctl_init);
+#endif
+
+static inline bool task_wants_idle_cpu(struct task_struct *p)
+{
+#ifdef CONFIG_UCLAMP_TASK_GROUP
+	/* caller holds rcu_read_lock() */
+	return READ_ONCE(sysctl_sched_ls_prefer_idle) &&
+	       READ_ONCE(task_group(p)->latency_sensitive);
+#else
+	return false;
+#endif
+}
+
 static int find_energy_efficient_cpu(struct task_struct *p, int prev_cpu, int sync)
 {
 	struct cpumask *cpus = this_cpu_cpumask_var_ptr(select_rq_mask);
@@ -8645,6 +8688,7 @@ static int find_energy_efficient_cpu(struct task_struct *p, int prev_cpu, int sy
 	struct sched_domain *sd;
 	struct perf_domain *pd;
 	struct energy_env eenv;
+	bool idle_only;
 
 	sync_entity_load_avg(&p->se);
 
@@ -8652,6 +8696,8 @@ static int find_energy_efficient_cpu(struct task_struct *p, int prev_cpu, int sy
 	pd = rcu_dereference(rd->pd);
 	if (!pd)
 		goto unlock;
+
+	idle_only = task_wants_idle_cpu(p);
 
 	cpu = smp_processor_id();
 	if (sync && cpu_rq(cpu)->nr_running == 1 &&
@@ -8679,6 +8725,7 @@ static int find_energy_efficient_cpu(struct task_struct *p, int prev_cpu, int sy
 
 	eenv_task_busy_time(&eenv, p, prev_cpu);
 
+retry:
 	for (; pd; pd = pd->next) {
 		unsigned long util_min = p_util_min, util_max = p_util_max;
 		unsigned long cpu_cap, cpu_actual_cap, util;
@@ -8709,6 +8756,10 @@ static int find_energy_efficient_cpu(struct task_struct *p, int prev_cpu, int sy
 				continue;
 
 			if (!cpumask_test_cpu(cpu, p->cpus_ptr))
+				continue;
+
+			/* Latency-sensitive tasks only consider idle CPUs. */
+			if (idle_only && !available_idle_cpu(cpu))
 				continue;
 
 			util = cpu_util(cpu, p, cpu, 0);
@@ -8812,6 +8863,19 @@ static int find_energy_efficient_cpu(struct task_struct *p, int prev_cpu, int sy
 			best_fits = max_fits;
 			best_actual_cap = cpu_actual_cap;
 		}
+	}
+
+	/*
+	 * No idle CPU can take the task: redo the search over all CPUs so a
+	 * latency-sensitive task is never placed worse than any other task.
+	 */
+	if (idle_only && best_delta == ULONG_MAX) {
+		idle_only = false;
+		prev_delta = best_delta = ULONG_MAX;
+		prev_fits = best_fits = -1;
+		prev_actual_cap = best_actual_cap = 0;
+		pd = rcu_dereference(rd->pd);
+		goto retry;
 	}
 	rcu_read_unlock();
 
